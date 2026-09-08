@@ -236,7 +236,8 @@ for j=1:n_window
   elsif($nsim_temps <= 24) { print MAT "    subplot(4,6,j)"; }
   else { print MAT "    subplot(5,6,j)"; }
   ### MRD END ###
-  print MAT "    plot(x, D(:,j), '-k')
+  print MAT "
+    plot(x, D(:,j), '-k')
     set(gca, 'YTick', 1:length(T_list), 'YTickLabel', T_list, 'YLim', [1 length(T_list)], ...
         'YGrid', 'on')
     title(['# ' num2str(j) ': ' num2str(counter(j))])
