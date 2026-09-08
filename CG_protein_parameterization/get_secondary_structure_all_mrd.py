@@ -62,7 +62,7 @@ def clean_pdb(input_pdb):
     AA_name_list = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 
                     'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
                     'HIE', 'HID', 'HIP'];
-    print("-> Cleaning PDB file %s"%input_pdb)
+    #print("-> Cleaning PDB file %s"%input_pdb)
     name = input_pdb.split('/')[-1].split('.pdb')[0]
     struct = pmd.load_file(input_pdb)
     sel_idx = np.zeros(len(struct.atoms))
@@ -72,11 +72,11 @@ def clean_pdb(input_pdb):
             for atm in res.atoms:
                 sel_idx[atm.idx] = 1
     struct[sel_idx].save(name+'_clean.pdb', overwrite=True, altlocs="occupancy")
-    print("   PDB file cleaned")
+    #print("   PDB file cleaned")
     return name+'_clean.pdb'
     
 def get_secondary_structure(pdb,ofnm):
-    print("-> Getting secondary structure information")
+    #print("-> Getting secondary structure information")
     
     screen_out = os.popen('stride '+pdb).readlines()
     # MRD catch rare case of stride outputting a Cycle Anti line
@@ -123,7 +123,7 @@ def get_secondary_structure(pdb,ofnm):
     if (len(CycleAntiLines) > 0):
         print("Note: STRIDE output the following lines before the secondary structure:")
         print(''.join(CycleAntiLines))
-    print("   Done.")
+    #print("   Done.")
 
 
 ########################### MAIN #########################################
