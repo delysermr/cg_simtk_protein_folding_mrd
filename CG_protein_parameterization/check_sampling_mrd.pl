@@ -226,11 +226,17 @@ for i = 1:size(data, 1)
 end
 
 figure(1)
-set(gcf,'Units','centimeters','Position',[8 1.5 35 25],'paperpositionmode','auto');
+set(gcf,'Units','centimeters','Position',[8 1.5 30 16],'paperpositionmode','auto');
 x = data(1,1):data(end,1);
 for j=1:n_window
-    subplot(3,6,j)
-    plot(x, D(:,j), '-k')
+";
+  ### MRD START ###
+  if($nsim_temps <= 18) { print MAT "    subplot(3,6,j)"; }
+  elsif($nsim_temps <= 20) { print MAT "    subplot(4,5,j)"; }
+  elsif($nsim_temps <= 24) { print MAT "    subplot(4,6,j)"; }
+  else { print MAT "    subplot(5,6,j)"; }
+  ### MRD END ###
+  print MAT "    plot(x, D(:,j), '-k')
     set(gca, 'YTick', 1:length(T_list), 'YTickLabel', T_list, 'YLim', [1 length(T_list)], ...
         'YGrid', 'on')
     title(['# ' num2str(j) ': ' num2str(counter(j))])
@@ -240,7 +246,7 @@ saveas(gcf, 'exchange.svg')
 quit";
   close(MAT);
   print("-> Going to plot high to low exchange...\n");
-  system("matlab -nodisplay -r plot_exchange > /dev/null");
+  #system("matlab -nodisplay -r plot_exchange > /dev/null");
   print("   Done\n");
 }
 
@@ -318,7 +324,6 @@ sub Cv_vs_step_plot
     close(CNTRL);
     system("pywham.py wham_cv.xml > /dev/null 2>&1");
   }
-
   open(MAT, ">plot_CV_sampling.m");
   print MAT "D = {};
 Tm = [];
@@ -358,9 +363,117 @@ end
 saveas(gcf, 'cv_sampling.svg');
 quit";
   close(MAT);
-  system("matlab -nodisplay -r plot_CV_sampling > /dev/null");
+  #system("matlab -nodisplay -r plot_CV_sampling > /dev/null");
   print("   Done\n");
-  
+
+  ### MRD START ###
+  my $ds2 = ($tot_step-$skip_step)/2;
+  for(my $i = 1; $i <= 2; $i++)
+  {
+    open(IN, ">myreaders.py");
+    print IN "def ReadLastColumn(filename):
+    QList = []
+    results = []
+    n = 1
+    f = open(filename, \"r\")
+    for line in f:
+        if n > ".($skip_step+$ds2*$i)." or n < ".($skip_step+$ds2*($i-1)+1).":
+            n = n + 1
+            continue
+        QList.append(float(line.strip()))
+        n += 1
+    f.close()
+    results.append(QList)
+    return results";
+    close(IN);
+    open(CNTRL, ">wham_cv.xml");
+    print CNTRL "<?xml version=\"1.0\" ?>
+<WhamSpec>
+    <General>
+        <Coordinates>
+            <Coordinate name=\"V\" />
+        </Coordinates>
+        <CoordinateFileReaders pythonModule=\"myreaders\" returnsTime=\"false\">
+            <Reader name=\"ReadLastColumn\">
+                <ReturnList name=\"V\" />
+            </Reader>
+        </CoordinateFileReaders>
+        <Binnings>
+            <Binning name=\"V\">
+                <Interval>1</Interval>
+            </Binning>
+        </Binnings>
+        <Parameters>
+            <Parameter name=\"kB\">0.0019872041</Parameter>
+        </Parameters>
+    </General>
+    <Trajectories>\n";
+    for(my $j=1;$j<=$nsim_temps;$j++)
+    {
+      print CNTRL " " x 8 . "<Trajectory T=\"" . $temps[$j-1] . "\">
+            <EnergyFunction>V</EnergyFunction>
+            <CoordinateFiles>
+                <CoordinateFile>../../aa${j}/ene_1.log</CoordinateFile>
+            </CoordinateFiles>
+        </Trajectory>\n";
+    }
+    print CNTRL "    </Trajectories>
+    <Jobs>
+        <HeatCapacity outFile=\"cv/cv_half_$i.dat\">
+            <EnergyFunction>V</EnergyFunction>
+            <Temperatures>${min_temp}:0.1:${max_temp}</Temperatures>
+        </HeatCapacity>
+    </Jobs>
+</WhamSpec>";
+    close(CNTRL);
+    system("pywham.py wham_cv.xml > /dev/null 2>&1");
+  }
+
+  open(MAT, ">plot_CV_sampling_halves.m");
+  print MAT "D = {};
+Tm = [];
+T_max = -9999999;
+T_min = 9999999;
+legend_str = {};
+n=1.1;
+for i=1:2
+    C = load(['cv/cv_half' num2str(i) '.dat']);
+    D{i} = C;
+    [m,j]=max(C(:,2));
+    Tm(i,:)=[C(j,1), m];
+    T_max = max([T_max; C(:,1)]);
+    T_min = min([T_min; C(:,1)]);
+    legend_str{i} = ['\$', num2str(".i."), '\$'];
+end
+T_min = floor(T_min);
+T_max = ceil(T_max);
+
+figure(1)
+hold on
+set(gcf,'Units','centimeters','Position',[8 1.5 10 8],'paperpositionmode','auto');
+for i=1:2
+    plot(D{i}(:,1),D{i}(:,2),'-','LineWidth',1.5)
+end
+set(gca, 'fontsize',10,'fontweight','normal','LineWidth',1.0,'fontname','Nimbus Roman No9 L')
+axis([T_min T_max 0 max(Tm(:,2))+1])
+box on
+grid on
+xlabel('\$T\\ (\\rm K)\$','fontsize',12,'color','k','Interpreter','latex')
+ylabel('\$C_{\\rm {V}}\\ (\\rm {kcal/mol/K})\$','fontsize',12,'color','k','Interpreter','latex')
+h = legend('String',legend_str,'Location','best','fontsize',10,'box','off','Interpreter','latex');
+
+for i=1:2
+    plot([Tm(i,1) Tm(i,1)],[0 Tm(i,2)],'--k','LineWidth',1.3)
+end
+saveas(gcf, 'cv_sampling_halves.svg');
+quit";
+  close(MAT);
+  #system("matlab -nodisplay -r plot_CV_sampling > /dev/null");
+  print("   Done\n");
+
+
+  ### MRD END ###
+
   open(IN, ">myreaders.py");
   print IN "def ReadLastColumn(filename):
   QList = []
@@ -461,7 +574,7 @@ end
 saveas(gcf, 'cv_windows.svg');
 quit";
   close(MAT);
-  system("matlab -nodisplay -r plot_CV_windows > /dev/null");
+  #system("matlab -nodisplay -r plot_CV_windows > /dev/null");
   print("   Done\n");
 }
 
@@ -482,7 +595,7 @@ for i=1:length(T_windows)
 end
 
 figure(1)
-set(gcf,'Units','centimeters','Position',[8 1.5 12 10],'paperpositionmode','auto');
+set(gcf,'Units','centimeters','Position',[8 1.5 10 8],'paperpositionmode','auto');
 C = colormap(jet(length(T_windows)));
 hold on
 for i=1:length(T_windows)
@@ -501,6 +614,6 @@ h = legend('String',legend_str,'Location','best','fontsize',6,'box','off','Inter
 saveas(gcf, 'Ep_distribution.svg');
 quit";
   close(MAT);
-  system("matlab -nodisplay -r plot_Ep_distribution > /dev/null");
+  #system("matlab -nodisplay -r plot_Ep_distribution > /dev/null");
   print("   Done\n");
 }
