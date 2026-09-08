@@ -260,28 +260,36 @@ for nbfix_list in nbfix_table:
 	ccoef_array[index2, index1] = c
 
 #build tabulated function for acoef, bcoef, ccoef
+# MRD build entire row, then increment text with entire row.
+# I found this much faster than directly incrementing text with every number one at a time
 acoef_node = ET.SubElement(node, "Function", name='acoef', type='Discrete2D',
 	xsize=str(num_atom), ysize=str(num_atom))
 text = ''
 for index1 in range(num_atom):
+    text1 = ''
 	for index2 in range(num_atom):
-		text += str(acoef_array[index1, index2]) + " "
+		text1 += str(acoef_array[index1, index2]) + " "
+    text += text1
 acoef_node.text = text
 
 bcoef_node = ET.SubElement(node, "Function", name='bcoef', type='Discrete2D',
 	xsize=str(num_atom), ysize=str(num_atom))
 text = ''
 for index1 in range(num_atom):
+    text1 = ''
 	for index2 in range(num_atom):
-		text += str(bcoef_array[index1, index2]) + " "
+		text1 += str(bcoef_array[index1, index2]) + " "
+    text += text1
 bcoef_node.text = text
 
 ccoef_node = ET.SubElement(node, "Function", name='ccoef', type='Discrete2D',
 	xsize=str(num_atom), ysize=str(num_atom))
 text = ''
 for index1 in range(num_atom):
+    text1 = ''
 	for index2 in range(num_atom):
-		text += str(ccoef_array[index1, index2]) + " "
+		text1 += str(ccoef_array[index1, index2]) + " "
+    text += text1
 ccoef_node.text = text
 
 #add custom nonbond parameters

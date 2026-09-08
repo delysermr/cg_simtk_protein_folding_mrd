@@ -14,6 +14,13 @@ import numpy as np
 
 sys.setrecursionlimit(int(1e6))
 
+'''
+Michael DeLyser:
+    Originally, domains had to be continuous and all residues had to be in a domain
+    I modified it so domains don't have to be continuous.
+    Also, If a residue is not in a domain, XXX
+'''
+
 usage = '\nUsage: create_cg_protein_model.py\n' \
         '       --ctrlfile | -f <model.ctrl> Control file for creating cg protein model\n'\
         '       [--help | -h] Print this information\n\n'\
@@ -187,24 +194,25 @@ for nseg, letter in enumerate(alphabet):
     
 # mass of amino acids
 # UNSURE! about pro, arg, his and cys weights
+# MRD changed pro, arg, his, and cys to be accurate.
 aaSCmass = {"ALA": 71.000000,
-            "CYS": 114.000000,
+            "CYS": 103.000000,
             "ASP": 114.000000,
             "GLU": 128.000000,
             "PHE": 147.000000,
             "GLY": 57.000000,
-            "HIS": 114.000000,
-            "HSD": 114.000000,
-            "HSE": 114.000000,
-            "HSP": 114.000000,
+            "HIS": 137.000000,
+            "HSD": 137.000000,
+            "HSE": 137.000000,
+            "HSP": 137.000000,
             "ILE": 113.000000,
             "LYS": 128.000000,
             "LEU": 113.000000,
             "MET": 131.000000,
             "ASN": 114.000000,
-            "PRO": 114.000000,
+            "PRO": 97.000000,
             "GLN": 128.000000,
-            "ARG": 114.000000,
+            "ARG": 156.000000,
             "SER": 87.000000,
             "THR": 101.000000,
             "VAL": 99.000000,
@@ -456,7 +464,10 @@ for opt, arg in opts:
         ctrlfile = arg
 
 ## Check dependency installation ##
-if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found'):
+#if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found'):
+# MRD added a second option for the error it would give (the one I did get)
+if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found') or 
+   os.popen('stride 2>&1').readlines()[0].strip().endswith('stride: not found'):
     print('Error: Essential software "stride" is not installed.\nPlease install stride before coarse-graining.')
     sys.exit()
 
@@ -599,6 +610,7 @@ if domain_file != "None":
     f = open(domain_file)
     lines = f.readlines()
     f.close()
+    ''' MRD: I don't want to just delete the original code...
     for line in lines:
         line = line.strip()
         if line.startswith('scale factor'):
@@ -622,6 +634,36 @@ if domain_file != "None":
     print("")
     if len(dom_nscal) != (1+ndomain)*ndomain/2:
         print("ERROR: Incorrect number of interfaces assigned. (%d, should be %d)"%(len(dom_nscal)-ndomain, (ndomain-1)*ndomain/2))
+        sys.exit()
+    '''
+    for line in lines:
+        line = line.strip()
+        if line.startswith('scale factor'):
+            words = line.split('=')
+            dom_nscal.append(float(words[-1]))
+        if line.startswith('domain'):
+            ndomain += 1
+            dom.append([]) # MRD one domain can be split up
+            dlims = line.split('=')[-1].split(',')
+            for dl in dlims:
+                words = dl.split('-')
+                dom[-1].append([int(w) for w in words])
+            if words[0] > words[1]:
+                print("ERROR: When defining the domains in the interface file, index %d is greater than %d!"%(words[0],words[1]))
+                sys.exit()
+    print('%d domain(s) defined in the Domain file %s'%(ndomain,domain_file))
+    if ndomain == 0:
+        print("ERROR: No domain definitions were read. Check the domain definition file!")
+        sys.exit()
+    print("Domain information:")
+    for i, d in enumerate(dom):
+        print("Domain %d: " % (i+1,end=""))
+        for d1 in d:
+            print("%d to %d, " % (d1[0],d1[1]),end="")
+        print("")
+    print("")
+    if len(dom_nscal) != (1+ndomain)*ndomain/2:
+        print("ERROR: Incorrect number of interfaces assigned. (%d, should be %d)"%(len(dom_nscal)-ndomain,(ndomain-1)*ndomain/2))
         sys.exit()
 # END read domain nscal values if domain is defined
 
@@ -826,6 +868,7 @@ if ndomain != 0:
     for atm in cg_structure.atoms:
         res_id = atm.residue.idx+1
         found = False
+        ''' MRD again I don't want to delete original code...
         for i, di in enumerate(dom):
             if res_id >= di[0] and res_id <= di[1]:
                 id_domain.append(i)
@@ -834,6 +877,21 @@ if ndomain != 0:
         if not found:
             print('ERROR: %s is not located in any domain.'%atm)
             sys.exit()
+        '''
+        for i, di in enumerate(dom):
+            for dii in di:
+                if res_id >= dii[0] and res_id <= dii[1]:
+                    id_domain.append(i)
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            id_domain.append(-1) # MRD use -1 to represent domain for atoms not in a domain / in IDRs
+            if casm != 0:
+                print("ERROR: MRD only added support for residues to not be in a domain for alpha carbon only model")
+                print("If you've implemented it yourself for another model, remove this error check")
+                sys.exit()
     print('')
 
 # Write psf, cor and top
@@ -972,6 +1030,9 @@ for i in range(len(cg_structure.residues)):
         if native_ss_map[i,j] == 1 or native_bsc_map[i,j] == 1 or native_hb_map[i,j] == 1:
             native_contact_map[i,j] = 1
             native_contact_map[j,i] = 1 # Force the native contact map symetric
+
+print("Total # of contact pairs (comparable to topo number): ",np.sum(native_contact_map)/2) # MRD
+
 
 ## Write prm file ##
 print('\nCreate prm\n')
@@ -1212,7 +1273,7 @@ if casm == 1:
                     
     f.write('\n')
     f.write('! %.4f, %.4f, %.4f\n'%(totene_bb, totene_sc, totene_bsc))
-else:
+else: 
     if not potential_name.startswith('GENERIC'): # C-alpha model
         f.write('! b-b due to Hbonding plus native side-chain interactions plus backbone-sidechain interactions\n')
         # Add up non-bonded energies
@@ -1228,7 +1289,11 @@ else:
                     if ndomain == 0: # No domain defined
                         ene += hb_ene_map[i,j]
                     else: # Domain defined
-                        if id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
+                        if id_domain[atm_i.idx] == -1 or id_domain[atm_j].idx == -1: 
+                            # MRD HB strength doesn't get scaled like other interactions, 
+                            # but I'm catching this here so I don't have to worry about breaking the else case below
+                            ene += hb_ene_map[i,j]
+                        elif id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
                             di = id_domain[atm_i.idx]
                             ene += hb_ene_map[i,j]
                         else: # in the interface
@@ -1244,7 +1309,10 @@ else:
                     if ndomain == 0: # No domain defined
                         ene += eps[res2n[resname_1]][res2n[resname_2]]
                     else: # Domain defined
-                        if id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
+                        if id_domain[atm_i.idx] == -1 or id_domain[atm_j.idx] == -1:
+                            # MRD here we do throw away the eta scaling factor
+                            ene += eps[res2n[resname_1]][res2n[resname_2]] # * 1.0
+                        elif id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
                             di = id_domain[atm_i.idx]
                             ene += eps[res2n[resname_1]][res2n[resname_2]] * dom_nscal[di]
                         else: # in the interface
@@ -1257,7 +1325,10 @@ else:
                     if ndomain == 0: # No domain defined
                         ene += ene_bsc
                     else: # Domain defined
-                        if id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
+                        if id_domain[atm_i.idx] == -1 or id_domain[atm_j.idx] == -1:
+                            # MRD once again, throw away eta
+                            ene += eps[res2n[resname_1]][res2n[resname_2]] # * 1.0
+                        elif id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
                             di = id_domain[atm_i.idx]
                             ene += ene_bsc
                         else: # in the interface
@@ -1269,6 +1340,9 @@ else:
                     if ndomain == 0: # No domain defined
                         ene += ene_bsc
                     else: # Domain defined
+                        if id_domain[atm_i.idx] == -1 or id_domain[atm_j.idx] == -1:
+                            # MRD ditto
+                            ene += eps[res2n[resname_1]][res2n[resname_2]]
                         if id_domain[atm_i.idx] == id_domain[atm_j.idx]: # in the same domain
                             di = id_domain[atm_i.idx]
                             ene += ene_bsc
