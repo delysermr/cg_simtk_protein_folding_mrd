@@ -420,7 +420,7 @@ quit";
     }
     print CNTRL "    </Trajectories>
     <Jobs>
-        <HeatCapacity outFile=\"cv/cv_half_$i.dat\">
+        <HeatCapacity outFile=\"cv/cv_half$i.dat\">
             <EnergyFunction>V</EnergyFunction>
             <Temperatures>${min_temp}:0.1:${max_temp}</Temperatures>
         </HeatCapacity>
