@@ -356,7 +356,7 @@ box on
 grid on
 xlabel('\$T\\ (\\rm K)\$','fontsize',12,'color','k','Interpreter','latex')
 ylabel('\$C_{\\rm {V}}\\ (\\rm {kcal/mol/K})\$','fontsize',12,'color','k','Interpreter','latex')
-h = legend('String',legend_str,'Location','best','fontsize',10,'box','off','Interpreter','latex');
+h = legend('String',legend_str,'Location','best','fontsize',10,'box','off','Interpreter','latex','AutoUpdate','off');
 
 for i=1:".POSIX::ceil(($tot_step-$skip_step)/$ds)."
     plot([Tm(i,1) Tm(i,1)],[0 Tm(i,2)],'--k','LineWidth',1.3)
@@ -461,7 +461,7 @@ box on
 grid on
 xlabel('\$T\\ (\\rm K)\$','fontsize',12,'color','k','Interpreter','latex')
 ylabel('\$C_{\\rm {V}}\\ (\\rm {kcal/mol/K})\$','fontsize',12,'color','k','Interpreter','latex')
-h = legend('String',legend_str,'Location','best','fontsize',10,'box','off','Interpreter','latex');
+h = legend('String',legend_str,'Location','best','fontsize',10,'box','off','Interpreter','latex','AutoUpdate','off');
 
 for i=1:2
     plot([Tm(i,1) Tm(i,1)],[0 Tm(i,2)],'--k','LineWidth',1.3)
