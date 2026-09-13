@@ -466,8 +466,7 @@ for opt, arg in opts:
 ## Check dependency installation ##
 #if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found'):
 # MRD added a second option for the error it would give (the one I did get)
-if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found') or 
-   os.popen('stride 2>&1').readlines()[0].strip().endswith('stride: not found'):
+if os.popen('stride 2>&1').readlines()[0].strip().endswith('command not found') or os.popen('stride 2>&1').readlines()[0].strip().endswith('stride: not found'):
     print('Error: Essential software "stride" is not installed.\nPlease install stride before coarse-graining.')
     sys.exit()
 
@@ -657,7 +656,7 @@ if domain_file != "None":
         sys.exit()
     print("Domain information:")
     for i, d in enumerate(dom):
-        print("Domain %d: " % (i+1,end=""))
+        print("Domain %d: " % (i+1),end="")
         for d1 in d:
             print("%d to %d, " % (d1[0],d1[1]),end="")
         print("")

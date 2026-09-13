@@ -267,8 +267,8 @@ acoef_node = ET.SubElement(node, "Function", name='acoef', type='Discrete2D',
 text = ''
 for index1 in range(num_atom):
     text1 = ''
-	for index2 in range(num_atom):
-		text1 += str(acoef_array[index1, index2]) + " "
+    for index2 in range(num_atom):
+        text1 += str(acoef_array[index1, index2]) + " "
     text += text1
 acoef_node.text = text
 
@@ -277,8 +277,8 @@ bcoef_node = ET.SubElement(node, "Function", name='bcoef', type='Discrete2D',
 text = ''
 for index1 in range(num_atom):
     text1 = ''
-	for index2 in range(num_atom):
-		text1 += str(bcoef_array[index1, index2]) + " "
+    for index2 in range(num_atom):
+        text1 += str(bcoef_array[index1, index2]) + " "
     text += text1
 bcoef_node.text = text
 
@@ -287,8 +287,8 @@ ccoef_node = ET.SubElement(node, "Function", name='ccoef', type='Discrete2D',
 text = ''
 for index1 in range(num_atom):
     text1 = ''
-	for index2 in range(num_atom):
-		text1 += str(ccoef_array[index1, index2]) + " "
+    for index2 in range(num_atom):
+        text1 += str(ccoef_array[index1, index2]) + " "
     text += text1
 ccoef_node.text = text
 
