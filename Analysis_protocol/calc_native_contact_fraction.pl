@@ -167,19 +167,23 @@ if(!$if_meaningful)
 if($traj =~ /\.cor$/)
 {
   open(DAT, ">${output_dir}/qbb_${name}.dat")||die("Error: cannot create ${output_dir}/qbb_${name}.dat\n\n");
+  open(DAT2, ">${output_dir}/qbb_${name}_counts.dat")||die("Error: cannot create ${output_dir}/qbb_${name}_counts.dat\n\n");
   foreach my $i (@meaningful_domain_idx)
   {
     my $dom = $domain[$i-1];
     if($dom->{"class"} eq "i")
     {
       printf DAT ("%10s ", $dom->{"range"}->[0]."|".$dom->{"range"}->[1]);
+      printf DAT2 ("%10s ", $dom->{"range"}->[0]."|".$dom->{"range"}->[1]);
     }
     else
     {
       printf DAT ("%10s ", "D_$i");
+      printf DAT2 ("%10s ", "D_$i");
     }
   }
   printf DAT ("%10s\n", "total");
+  printf DAT2 ("%10s\n", "total");
   my @traj_cor = parse_cor($traj);
   my $natom = @traj_cor;
   if($natom ne $native_natom)
@@ -202,6 +206,7 @@ if($traj =~ /\.cor$/)
     }
     $fraction = sprintf("%.4f", $fraction);
     printf DAT ("%10s ", $fraction);
+    printf DAT2 ("%10d ", $traj_contect_number[$j-1]);
     $tot_tcn += $traj_contact_number[$j-1];
     $tot_ncn += $native_contact_number[$j-1];
   }
@@ -216,6 +221,7 @@ if($traj =~ /\.cor$/)
   }
   $fraction = sprintf("%.4f", $fraction);
   printf DAT ("%10s\n", $fraction);
+  printf DAT2 ("%10d\n", $tot_tcn);
   exit;
 }
 
@@ -267,19 +273,23 @@ if($restart && -s "${output_dir}/qbb_${name}.dat")
 else
 {
   open(DAT, ">${output_dir}/qbb_${name}.dat")||die("Error: cannot create ${output_dir}/qbb_${name}.dat\n\n");
+  open(DAT2, ">${output_dir}/qbb_${name}_counts.dat")||die("Error: cannot create ${output_dir}/qbb_${name}_counts.dat\n\n");
   foreach my $i (@meaningful_domain_idx)
   {
     my $dom = $domain[$i-1];
     if($dom->{"class"} eq "i")
     {
       printf DAT ("%10s ", $dom->{"range"}->[0]."|".$dom->{"range"}->[1]);
+      printf DAT2 ("%10s ", $dom->{"range"}->[0]."|".$dom->{"range"}->[1]);
     }
     else
     {
       printf DAT ("%10s ", "D_$i");
+      printf DAT2 ("%10s ", "D_$i");
     }
   }
   printf DAT ("%10s\n", "total");
+  printf DAT2 ("%10s\n", "total");
 }
 
 my $deltat = $delta * $tstep;
@@ -306,6 +316,7 @@ for(my $i = 1; $i <= $nframe; $i++)
       }
       $fraction = sprintf("%.4f", $fraction);
       printf DAT ("%10s ", $fraction);
+      printf DAT2 ("%10d ", $traj_contact_number[$j-1]);
       $tot_tcn += $traj_contact_number[$j-1];
       $tot_ncn += $native_contact_number[$j-1];
     }
@@ -320,9 +331,24 @@ for(my $i = 1; $i <= $nframe; $i++)
     }
     $fraction = sprintf("%.4f", $fraction);
     printf DAT ("%10s\n", $fraction);
+    printf DAT2 ("%10d\n", $tot_tcn);
   }
 }
 close(DAT);
+close(DAT2);
+
+open(MRD, ">${output_dir}/ncn.dat")||die("Error: cannot create ${output_dir}/ncn.dat\n\n");
+my $mrd_ncn = 0;
+foreach my $j (@meaningful_domain_idx)
+{
+  printf MRD ("%10d ",$native_contact_number[$j-1]);
+  $mrd_ncn += $native_contact_number[$j-1];
+}
+printf MRD ("%10d",$mrd_ncn);
+close(MRD);
+
+
+
 
 ######################################################
 sub parse_domain
