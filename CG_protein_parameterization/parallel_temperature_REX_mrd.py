@@ -40,10 +40,86 @@ usage = '\nUsage: python parallel_temperature_REX.py\n' \
         '  starting_strucs_t9 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t10 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t11 = setup/1shf_clean_ca.cor\n'\
-        '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'
+        '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'\
+        '  velocity_method = <0, 1, 2, or 3>\n'
+
+# velocity_method:
+#   0: do what we've been doing - reassign velocities from boltzmann distribution at desired temperature after every swap attempt
+#   1: reassign velocities while ''preserving equipartition'' - instead of using Ttarget, use 2 * Ttarget - Told for drawing random values
+#   2: read velocities from end of last step.
+#       if replica swapped, rescale all components by sqrt(Tnew/Told)
+#       if replica didn't swap, keep old velocities (should preserve dynamics)
+#   3: same as 2, but rescale by sqrt((2*Ttarget-Told)/Told)
+### MRD velocity reporter ###
+
+class VelocityReporter(object):
+    def __init__(self, filename, reportInterval):
+        """Initialize the reporter with an output file and reporting frequency."""
+        self._out = open(filename, 'w')
+        self._reportInterval = reportInterval
+
+    def __del__(self):
+        """Ensure the output file closes properly when the simulation ends."""
+        self._out.close()
+
+    def describeNextReport(self, simulation):
+        """Tells the simulation when the next report is due and what data to retrieve."""
+        # 1. Calculate how many steps until the next report interval
+        steps = self._reportInterval - simulation.currentStep % self._reportInterval
+        
+        # 2. Return a 6-tuple indicating requirements:
+        # (steps, positions, velocities, forces, energies, enforcePeriodicBox)
+        # We only want velocities here, so we set velocities=True.
+        return (steps, False, True, False, False, None)
+
+    def report(self, simulation, state):
+        velocities = state.getVelocities().value_in_unit(nanometers / picosecond)
+        self._out.write(f"# Step {simulation.currentStep}\n")
+        for v in velocities:
+            self._out.write("%.6f %.6f %.6f\n" % (float(v[0]),float(v[1]),float(v[2])))
+
+def read_vel_rept(aan):
+    vel_fnm = "aa%d/velocity_holder.txt" % (aan+1)
+    with open(vel_fnm,'rt') as fpi:
+        v = [[float(x) for x in vl.split()] for vl in fpi.readlines() if vl[0] != '#']
+    return v
+
+def read_temp(aan):
+    temp_fnm = "aa%d/temperature_holder.txt" % (aan+1)
+    with open(temp_fnm,'rt') as fpi:
+        lines = fpi.readlines()
+    for t in lines:
+        try:
+            return float(t)
+        except ValueError:
+            continue
+    return None
+
+def make_velocity_decision(velinfo,temp):
+    if velinfo[0] == 0 or velinfo[0] == -1:
+        return 0, temp
+    temp_old = read_temp(velinfo[2])
+    if temp_old == None:
+        temp_old = temp.value_in_unit(kelvin)
+    if velinfo[0] == 1:
+        sctemp = 2 * temp.value_in_unit(kelvin) - temp_old
+        return 0, Quantity(sctemp,kelvin)
+    #velocities_old = read_vel(velinfo[2])
+    velocities_old = read_vel_rept(velinfo[2])
+    if velinfo[1] != velinfo[2]:
+        if velinfo[0] == 2:
+            scale = (temp.value_in_unit(kelvin)/temp_old)**0.5
+        elif velinfo[0] == 3:
+            scale = ((2.0 * temp.value_in_unit(kelvin)-temp_old)/temp_old)**0.5
+        velocities = [[velocities_old[i][j] * scale for j in range(3)] for i in range(len(velocities_old))]
+    else:
+        velocities = velocities_old
+    return 1, velocities
+
+### End reporters ###
 
 ###### run Langevin Dynamics ######
-def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict):
+def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict, velinfo = [0]):
     start_time = time.time()
     timestep = 0.015*picoseconds
     fbsolu = 0.05/picosecond
@@ -75,7 +151,12 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outn
     integrator.setRandomNumberSeed(rand)
     simulation = Simulation(top, system, integrator, platform, properties)
     simulation.context.setPositions(cor.positions)
-    simulation.context.setVelocitiesToTemperature(strtemp)
+    # VELOCITIES
+    sel, par = make_velocity_decision(velinfo,temp)
+    if sel == 0:
+        simulation.context.setVelocitiesToTemperature(par)
+    else:
+        simulation.context.setVelocities(par)
     simulation.reporters = []
     #simulation.reporters.append(PDBReporter(outname+'.pdb', simulation_steps))
     if trajname != '':
@@ -85,6 +166,9 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outn
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=False))
         else:
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=True))
+    if velinfo[0] != 0:
+        simulation.reporters.append(VelocityReporter("aa%d/velocity_holder.txt" % (window+1),simulation_steps,append=False))
+        simulation.reporters.append(StateDataReporter("aa%d/temperature_holder.txt" % (window+1),simulation_steps,step=False,append=False,temperature=True))
     simulation.step(simulation_steps)
     #pdb = pmd.load_file(outname+'.pdb')
     #pdb.save(outname, format='charmmcrd', overwrite=True)
@@ -163,6 +247,7 @@ accp_file_prefix = 'stats' # acceptance file prefix
 psf = '' # Charmm psf file for CG model
 top = '' # Charmm top file for CG model
 param = '' # Charmm prm file for CG model
+velocity_method = [0]
 starting_strucs = [] # starting structures (Charmm cor file)
 
 if not os.path.exists(ctrlfile):
@@ -243,6 +328,10 @@ try:
         if line.startswith('starting_strucs'):
             words = line.split()
             starting_strucs.append(words[2])
+            continue
+        if line.startswith('velocity_method'):
+            words = line.split()
+            velocity_method = [int(words[-1])]
             continue
 finally:
      file_object.close()
@@ -328,7 +417,7 @@ else:
 
 ###### Setup writing log files ######
 
-os.system('parse_cg_prm.py -t '+top+' -p '+param)
+os.system('parse_cg_prm_mrd.py -t '+top+' -p '+param)
 xml_param = param.split('.prm')
 xml_param = xml_param[0]+'.xml'
 
@@ -405,6 +494,10 @@ for chain in top.chains():
 properties = {'Threads': str(ppn)}
 
 ###### equil phase ######
+for i in range(nwin):
+    with open("aa%d/temperature_holder.txt" % (i+1),'wt') as fpo:
+        fpo.write("%g" % (temps[i].value_in_unit(kelvin)))
+exch_map = [i for i in range(nwin)]
 for i in range(nexch_equil):
     energy = []
     process_time = []
@@ -418,13 +511,20 @@ for i in range(nexch_equil):
 #            log_file_object.write(str(window_track[window]+1)+'| ')
 #        else:
 #            log_file_object.write(str(window_track[window]+1)+'||| ')
-        
+        # VEL
+        if velocity_method[0] == 0:
+            vel_met = [0]
+        else:
+            if i == 0:
+                vel_met = [-1,window,exch_map[window]]
+            else:
+                vel_met = [velocity_method[0],window,exch_map[window]]    
         strtemp = temps[exch_map[window]]
         cor = CharmmCrdFile(cor_list[window])
         outname = 'aa'+str(window+1)+'/1_'+str(i+1)+'_equil.cor'
         rand = random.randint(10,1000000000)
         p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor, temps[window], 
-            strtemp, outname, properties, nsteps_equil, '', rand, window, return_dict))
+            strtemp, outname, properties, nsteps_equil, '', rand, window, return_dict, vel_met))
         p.daemon = True
         process_pool.append(p)
     for window in range(nwin):
@@ -461,18 +561,26 @@ for i in range(nsteps_start-1, nexch_prod):
     return_dict = multiprocessing.Manager().dict()
     log_file_object = open(log_file,'a')
     log_file_object.write('PROD '+str(i+1)+': ')
+    print(exch_map)
     for window in range(nwin):
         if window == nwin-1:
             log_file_object.write(str(window_track[window]+1)+'| ')
         else:
             log_file_object.write(str(window_track[window]+1)+'||| ')
-        
+        # VEL
+        if velocity_method[0] == 0:
+            vel_met = [0]
+        else:
+            if i == 0 and nexch_equil == 0:
+                vel_met = [-1,window,exch_map[window]]
+            else:
+                vel_met = [velocity_method[0],window,exch_map[window]]    
         strtemp = temps[exch_map[window]]
         cor = CharmmCrdFile(cor_list[window])
         outname = 'aa'+str(window+1)+'/1_'+str(i+1)+'_prod.cor'
         rand = random.randint(10,1000000000)
         p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor, temps[window], 
-            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict))
+            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict, vel_met))
         p.daemon = True
         process_pool.append(p)
     for window in range(nwin):
