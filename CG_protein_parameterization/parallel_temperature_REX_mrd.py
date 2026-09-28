@@ -41,8 +41,8 @@ usage = '\nUsage: python parallel_temperature_REX.py\n' \
         '  starting_strucs_t10 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t11 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'\
-        '  velocity_method = <0, 1, 2, or 3>\n'
-
+        '  velocity_method = <0, 1, 2, or 3>\n'\
+        '  (bKET)\n'
 # velocity_method:
 #   0: do what we've been doing - reassign velocities from boltzmann distribution at desired temperature after every swap attempt
 #   1: reassign velocities while ''preserving equipartition'' - instead of using Ttarget, use 2 * Ttarget - Told for drawing random values
@@ -119,7 +119,7 @@ def make_velocity_decision(velinfo,temp):
 ### End reporters ###
 
 ###### run Langevin Dynamics ######
-def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict, velinfo = [0]):
+def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict, velinfo = [0],bKETemp=False):
     start_time = time.time()
     timestep = 0.015*picoseconds
     fbsolu = 0.05/picosecond
@@ -169,6 +169,8 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outn
     if velinfo[0] != 0:
         simulation.reporters.append(VelocityReporter("aa%d/velocity_holder.txt" % (window+1),simulation_steps,append=False))
         simulation.reporters.append(StateDataReporter("aa%d/temperature_holder.txt" % (window+1),simulation_steps,step=False,append=False,temperature=True))
+    if bKETemp:
+        simulation.reporters.append(StateDataReporter("aa%d/KET.dat" % (window+1),1,step=True,append=True,temperature=True,kineticEnergy=True))
     simulation.step(simulation_steps)
     #pdb = pmd.load_file(outname+'.pdb')
     #pdb.save(outname, format='charmmcrd', overwrite=True)
@@ -248,6 +250,7 @@ psf = '' # Charmm psf file for CG model
 top = '' # Charmm top file for CG model
 param = '' # Charmm prm file for CG model
 velocity_method = [0]
+bKET = False
 starting_strucs = [] # starting structures (Charmm cor file)
 
 if not os.path.exists(ctrlfile):
@@ -332,6 +335,9 @@ try:
         if line.startswith('velocity_method'):
             words = line.split()
             velocity_method = [int(words[-1])]
+            continue
+        if line.startswith('bKET'):
+            bKET = True
             continue
 finally:
      file_object.close()
@@ -580,7 +586,7 @@ for i in range(nsteps_start-1, nexch_prod):
         outname = 'aa'+str(window+1)+'/1_'+str(i+1)+'_prod.cor'
         rand = random.randint(10,1000000000)
         p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor, temps[window], 
-            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict, vel_met))
+            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict, vel_met, bKET))
         p.daemon = True
         process_pool.append(p)
     for window in range(nwin):
