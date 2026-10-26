@@ -44,21 +44,30 @@ usage = '\nUsage: python parallel_temperature_REX.py\n' \
         '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'
 
 class VelocityReporter(object):
+    """Write the velocities of an exchange's final frame to `filename`.
+
+    The frame is written atomically: it goes to a temporary file in the same
+    directory, is flushed and fsync'd, and is then os.replace()d onto `filename`.
+    That rename is atomic on POSIX, so `filename` is never observed truncated or
+    half-written -- a job killed mid-exchange leaves the PREVIOUS exchange's file
+    intact instead of an empty one.
+
+    The earlier implementation opened `filename` with mode 'w' in __init__, which
+    run_REX_LD calls before simulation.step().  That destroyed the old frame at the
+    start of every exchange and only rewrote it at the end, so a walltime kill or
+    scancel -- essentially always landing inside the MD block -- left nothing to
+    restart from.
+    """
     def __init__(self, filename, reportInterval):
         """Initialize the reporter with an output file and reporting frequency."""
-        self._out = open(filename, 'w')
+        self._filename = filename
         self._reportInterval = reportInterval
-
-    def __del__(self):
-        """Ensure the output file closes properly when the simulation ends."""
-        if not self._out.closed:
-            self._out.close()
 
     def describeNextReport(self, simulation):
         """Tells the simulation when the next report is due and what data to retrieve."""
         # 1. Calculate how many steps until the next report interval
         steps = self._reportInterval - simulation.currentStep % self._reportInterval
-        
+
         # 2. Return a 6-tuple indicating requirements:
         # (steps, positions, velocities, forces, energies, enforcePeriodicBox)
         # We only want velocities here, so we set velocities=True.
@@ -66,20 +75,24 @@ class VelocityReporter(object):
 
     def report(self, simulation, state):
         velocities = state.getVelocities().value_in_unit(nanometers / picosecond)
-        #self._out.write(f"# Step {simulation.currentStep}\n")
-        if not self._out.closed:
+        tmp_filename = self._filename + '.tmp'
+        with open(tmp_filename, 'w') as out:
             for v in velocities:
-                self._out.write("%.6f %.6f %.6f\n" % (float(v[0]),float(v[1]),float(v[2])))
+                out.write("%.6f %.6f %.6f\n" % (float(v[0]), float(v[1]), float(v[2])))
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp_filename, self._filename)
 
-def read_vel_rept(aan,fnm):
-    vel_fnm = "aa%d/%s" % (aan+1,fnm)
+def read_vel_rept(vel_fnm):
+    """Read one velocity frame (nm/ps, one bead per line) written by VelocityReporter."""
     if not Path(vel_fnm).is_file():
-        print("ERROR: vel_fnm %s isn't a file" % (vel_fnm))
+        print("ERROR: velocity file %s does not exist, so this step cannot be "
+              "restarted with velocity continuity." % (vel_fnm))
         exit()
     with open(vel_fnm,'rt') as fpi:
         lines = fpi.readlines()
     if len(lines) == 0:
-        print("0 len lines %s!" % (vel_fnm))
+        print("ERROR: velocity file %s is empty!" % (vel_fnm))
         exit()
     if lines[0][0] == "#":
         del lines[0]
@@ -139,7 +152,10 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, vel, temp, strtemp,
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=False))
         else:
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=True))
-        simulation.reporters.append(VelocityReporter("aa%d/velocity_holder.txt" % (window+1),simulation_steps))
+        # Name the velocity frame after the .cor it accompanies -- aa<w>/1_<step>_prod.cor
+        # gives aa<w>/1_<step>_prod_vel.dat -- so the two can never refer to different steps.
+        vel_name = os.path.splitext(outname)[0] + '_vel.dat'
+        simulation.reporters.append(VelocityReporter(vel_name, simulation_steps))
     simulation.step(simulation_steps)
     #pdb = pmd.load_file(outname+'.pdb')
     #pdb.save(outname, format='charmmcrd', overwrite=True)
@@ -220,6 +236,7 @@ psf = '' # Charmm psf file for CG model
 top = '' # Charmm top file for CG model
 param = '' # Charmm prm file for CG model
 starting_strucs = [] # starting structures (Charmm cor file)
+starting_vels = [] # starting velocities (VelocityReporter .dat file; restart only)
 
 if not os.path.exists(ctrlfile):
     print('Error: cannot find control file ' + ctrlfile + '.')
@@ -339,19 +356,41 @@ if len(starting_strucs) != nwin and restart == 0:
 if restart == 1:
     nexch_equil = 0
     starting_strucs = []
+    starting_vels = []
     n_frame_traj = []
     n_frame_ene = []
+    n_frame_vel = []
     for i in range(nwin):
         traj = mdtraj.load_dcd('aa'+str(i+1)+'/mc1.dcd', top=psf)
         n_frame_traj.append(traj.n_frames)
         n_frame_ene.append(int(os.popen('cat aa'+str(i+1)+'/'+ene_file_prefix+'_1.log | wc -l').read().strip()))
+        # Velocity frames are named for the exchange they belong to, so the highest
+        # step on disk is the last exchange that can be resumed with velocity
+        # continuity.  Only the newest is kept (see the cleanup in the prod loop).
+        vel_steps = [int(p.name.split('_')[1]) for p in Path('aa'+str(i+1)).glob('1_*_prod_vel.dat')]
+        n_frame_vel.append(max(vel_steps) if len(vel_steps) > 0 else 0)
     min_n_frame_traj = min(n_frame_traj)
     min_n_frame_ene = min(n_frame_ene)
-    min_n_frame = min(min_n_frame_traj, min_n_frame_ene)
+    min_n_frame_vel = min(n_frame_vel)
+    min_n_frame = min(min_n_frame_traj, min_n_frame_ene, min_n_frame_vel)
     if min_n_frame < nsteps_start-1:
         print('Warning: min frame number is less than nsteps_start-1; '+str(min_n_frame)+' < '+str(nsteps_start-1))
         nsteps_start = min_n_frame+1
         print('Adjust nsteps_start = '+str(nsteps_start))
+    # Check velocity availability BEFORE the destructive truncation below, so a restart
+    # that cannot preserve velocity continuity fails without having already rewritten
+    # mc1.dcd and the energy logs.  Only the newest velocity frame is retained, so
+    # nsteps_start cannot rewind past it.
+    missing_vel = [v for v in ['aa'+str(i+1)+'/1_'+str(nsteps_start-1)+'_prod_vel.dat'
+                               for i in range(nwin)] if not Path(v).is_file()]
+    if len(missing_vel) > 0:
+        print('Error: cannot restart at nsteps_start = '+str(nsteps_start)+' with velocity '
+              'continuity. The velocity frame for exchange '+str(nsteps_start-1)+' is missing:')
+        for v in missing_vel:
+            print('       '+v)
+        print('       Highest velocity frame available in every window: '+str(min_n_frame_vel)
+              +'; set nsteps_start = '+str(min_n_frame_vel+1)+' to resume from there.')
+        sys.exit()
     for i in range(nwin):
         if n_frame_traj[i] >= nsteps_start-1:
             traj = mdtraj.load_dcd('aa'+str(i+1)+'/mc1.dcd', top=psf)
@@ -371,6 +410,7 @@ if restart == 1:
             fo.close()
             #os.system('sed \''+str(nsteps_start)+',$d\' -i aa'+str(i+1)+'/'+ene_file_prefix+'_1.log')
         starting_strucs.append('aa'+str(i+1)+'/1_'+str(nsteps_start-1)+'_prod.cor')
+        starting_vels.append('aa'+str(i+1)+'/1_'+str(nsteps_start-1)+'_prod_vel.dat')
     log_file = log_file.split('.')[0] + '_r_' + str(nsteps_start) + '.log'
     accp_file_prefix = accp_file_prefix + '_r_' + str(nsteps_start)
 elif restart == 0:
@@ -451,7 +491,7 @@ for i in range(nwin):
     vel.append([])
 if restart == 1:
     for i in range(nwin):
-        vel[i] = read_vel_rept(i,"velocity_holder.txt")
+        vel[i] = read_vel_rept(starting_vels[i])
 psf_file = psf
 psf = CharmmPsfFile(psf)
 psf_pmd = pmd.charmm.psf.CharmmPsfFile(psf_file)
@@ -509,10 +549,12 @@ for i in range(nexch_equil):
             cor[j], cor[j+1] = cor[j+1], cor[j]
             ratu = (temps[j+1]/temps[j])**0.5
             ratd = (temps[j]/temps[j+1])**0.5
+            # Index access, not .x/.y/.z: velocities read back from a _prod_vel.dat file
+            # are plain [x, y, z] lists, which have no .x attribute.  Vec3 is a namedtuple
+            # so indexing works for both.  Matches the prod-phase swap below.
             for k in range(len(vel[j])):
-                vel[j][k] = Vec3(vel[j][k].x * ratu, vel[j][k].y * ratu, vel[j][k].z * ratu)
-                vel[j+1][k] = Vec3(vel[j+1][k].x * ratd, vel[j+1][k].y * ratd, vel[j+1][k].z * ratd)
-                #vel[j][k], vel[j+1][k] = vel[j+1][k], vel[j][k]
+                vel[j][k] = Vec3(vel[j][k][0] * ratu, vel[j][k][1] * ratu, vel[j][k][2] * ratu)
+                vel[j+1][k] = Vec3(vel[j+1][k][0] * ratd, vel[j+1][k][1] * ratd, vel[j+1][k][2] * ratd)
             vel[j], vel[j+1] = vel[j+1], vel[j]
 
     log_file_object.write('%s %s %.2f %.2f %s\n'%(time.strftime('%H:%M:%S', time.localtime(start_time)), 
@@ -594,6 +636,9 @@ for i in range(nsteps_start-1, nexch_prod):
         new_window_track[window] = window_track[exch_map[window]]
         if i > 0:
             os.remove('aa'+str(window+1)+'/1_'+str(i)+'_prod.cor')
+            prev_vel = 'aa'+str(window+1)+'/1_'+str(i)+'_prod_vel.dat'
+            if os.path.exists(prev_vel):
+                os.remove(prev_vel)
     window_track = new_window_track
 
     # print acceptence ratio
