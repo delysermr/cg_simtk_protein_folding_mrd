@@ -11,6 +11,7 @@ from sys import stdout, exit, stderr
 import getopt, os, time, multiprocessing, random, math
 import parmed as pmd
 import mdtraj
+from pathlib import Path
 
 usage = '\nUsage: python parallel_temperature_REX.py\n' \
         '       --ctrlfile | -f <REX.ctrl> Control file for temperature replica exchange\n'\
@@ -40,17 +41,7 @@ usage = '\nUsage: python parallel_temperature_REX.py\n' \
         '  starting_strucs_t9 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t10 = setup/1shf_clean_ca.cor\n'\
         '  starting_strucs_t11 = setup/1shf_clean_ca.cor\n'\
-        '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'\
-        '  velocity_method = <0, 1, 2, or 3>\n'\
-        '  (bKET)\n'
-# velocity_method:
-#   0: do what we've been doing - reassign velocities from boltzmann distribution at desired temperature after every swap attempt
-#   1: reassign velocities while ''preserving equipartition'' - instead of using Ttarget, use 2 * Ttarget - Told for drawing random values
-#   2: read velocities from end of last step.
-#       if replica swapped, rescale all components by sqrt(Tnew/Told)
-#       if replica didn't swap, keep old velocities (should preserve dynamics)
-#   3: same as 2, but rescale by sqrt((2*Ttarget-Told)/Told)
-### MRD velocity reporter ###
+        '  starting_strucs_t12 = setup/1shf_clean_ca.cor\n'
 
 class VelocityReporter(object):
     def __init__(self, filename, reportInterval):
@@ -60,7 +51,8 @@ class VelocityReporter(object):
 
     def __del__(self):
         """Ensure the output file closes properly when the simulation ends."""
-        self._out.close()
+        if not self._out.closed:
+            self._out.close()
 
     def describeNextReport(self, simulation):
         """Tells the simulation when the next report is due and what data to retrieve."""
@@ -74,52 +66,30 @@ class VelocityReporter(object):
 
     def report(self, simulation, state):
         velocities = state.getVelocities().value_in_unit(nanometers / picosecond)
-        self._out.write(f"# Step {simulation.currentStep}\n")
-        for v in velocities:
-            self._out.write("%.6f %.6f %.6f\n" % (float(v[0]),float(v[1]),float(v[2])))
+        #self._out.write(f"# Step {simulation.currentStep}\n")
+        if not self._out.closed:
+            for v in velocities:
+                self._out.write("%.6f %.6f %.6f\n" % (float(v[0]),float(v[1]),float(v[2])))
 
-def read_vel_rept(aan):
-    vel_fnm = "aa%d/velocity_holder.txt" % (aan+1)
+def read_vel_rept(aan,fnm):
+    vel_fnm = "aa%d/%s" % (aan+1,fnm)
+    if not Path(vel_fnm).is_file():
+        print("ERROR: vel_fnm %s isn't a file" % (vel_fnm))
+        exit()
     with open(vel_fnm,'rt') as fpi:
-        v = [[float(x) for x in vl.split()] for vl in fpi.readlines() if vl[0] != '#']
-    return v
-
-def read_temp(aan):
-    temp_fnm = "aa%d/temperature_holder.txt" % (aan+1)
-    with open(temp_fnm,'rt') as fpi:
         lines = fpi.readlines()
-    for t in lines:
-        try:
-            return float(t)
-        except ValueError:
-            continue
-    return None
-
-def make_velocity_decision(velinfo,temp):
-    if velinfo[0] == 0 or velinfo[0] == -1:
-        return 0, temp
-    temp_old = read_temp(velinfo[2])
-    if temp_old == None:
-        temp_old = temp.value_in_unit(kelvin)
-    if velinfo[0] == 1:
-        sctemp = 2 * temp.value_in_unit(kelvin) - temp_old
-        return 0, Quantity(sctemp,kelvin)
-    #velocities_old = read_vel(velinfo[2])
-    velocities_old = read_vel_rept(velinfo[2])
-    if velinfo[1] != velinfo[2]:
-        if velinfo[0] == 2:
-            scale = (temp.value_in_unit(kelvin)/temp_old)**0.5
-        elif velinfo[0] == 3:
-            scale = ((2.0 * temp.value_in_unit(kelvin)-temp_old)/temp_old)**0.5
-        velocities = [[velocities_old[i][j] * scale for j in range(3)] for i in range(len(velocities_old))]
-    else:
-        velocities = velocities_old
-    return 1, velocities
+    if len(lines) == 0:
+        print("0 len lines %s!" % (vel_fnm))
+        exit()
+    if lines[0][0] == "#":
+        del lines[0]
+    v = [[float(x) for x in vl.split()] for vl in lines] #fpi.readlines()] if vl[0] != '#']
+    return v
 
 ### End reporters ###
 
 ###### run Langevin Dynamics ######
-def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict, velinfo = [0],bKETemp=False):
+def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, vel, temp, strtemp, outname, properties, simulation_steps, trajname, rand, window, return_dict):
     start_time = time.time()
     timestep = 0.015*picoseconds
     fbsolu = 0.05/picosecond
@@ -150,13 +120,16 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outn
     integrator.setConstraintTolerance(constraint_tolerance)
     integrator.setRandomNumberSeed(rand)
     simulation = Simulation(top, system, integrator, platform, properties)
-    simulation.context.setPositions(cor.positions)
+    #simulation.context.setPositions(cor.positions)
+    try: # this should only happen on the very first call of this function for each replica
+        simulation.context.setPositions(cor.positions)
+    except AttributeError: # after that, it should error and we fall here
+        simulation.context.setPositions(cor)
     # VELOCITIES
-    sel, par = make_velocity_decision(velinfo,temp)
-    if sel == 0:
-        simulation.context.setVelocitiesToTemperature(par)
-    else:
-        simulation.context.setVelocities(par)
+    if len(vel) == 0: # again, this should only happen on the very first call of this function for each replica
+        simulation.context.setVelocitiesToTemperature(temp)
+    else: # after that, we should have the velocities already
+        simulation.context.setVelocities(vel)
     simulation.reporters = []
     #simulation.reporters.append(PDBReporter(outname+'.pdb', simulation_steps))
     if trajname != '':
@@ -166,22 +139,19 @@ def run_REX_LD(psf_file, psf, forcefield, templete_map, cor, temp, strtemp, outn
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=False))
         else:
             simulation.reporters.append(DCDReporter(trajname, simulation_steps, append=True))
-    if velinfo[0] != 0:
-        simulation.reporters.append(VelocityReporter("aa%d/velocity_holder.txt" % (window+1),simulation_steps,append=False))
-        simulation.reporters.append(StateDataReporter("aa%d/temperature_holder.txt" % (window+1),simulation_steps,step=False,append=False,temperature=True))
-    if bKETemp:
-        simulation.reporters.append(StateDataReporter("aa%d/KET.dat" % (window+1),1,step=True,append=True,temperature=True,kineticEnergy=True))
+        simulation.reporters.append(VelocityReporter("aa%d/velocity_holder.txt" % (window+1),simulation_steps))
     simulation.step(simulation_steps)
     #pdb = pmd.load_file(outname+'.pdb')
     #pdb.save(outname, format='charmmcrd', overwrite=True)
     #os.remove(outname+'.pdb')
-    current_cor = simulation.context.getState(getPositions=True).getPositions()
+    current_cor = simulation.context.getState(getPositions=True).getPositions()#.value_in_unit(angstrom)
     psf_pmd.positions = current_cor
     psf_pmd.save(outname, format='charmmcrd', overwrite=True)
     energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
     energy = energy.value_in_unit(kilocalorie/mole)
+    current_velocities = simulation.context.getState(velocities=True).getVelocities().value_in_unit(nanometer/picosecond)
     end_time = time.time()
-    return_dict[window] = [energy, end_time-start_time]
+    return_dict[window] = [energy, end_time-start_time, current_cor, current_velocities]
 ###### END run Langevin Dynamics ######
 
 ###### Temperature Swap ######
@@ -249,8 +219,6 @@ accp_file_prefix = 'stats' # acceptance file prefix
 psf = '' # Charmm psf file for CG model
 top = '' # Charmm top file for CG model
 param = '' # Charmm prm file for CG model
-velocity_method = [0]
-bKET = False
 starting_strucs = [] # starting structures (Charmm cor file)
 
 if not os.path.exists(ctrlfile):
@@ -331,13 +299,6 @@ try:
         if line.startswith('starting_strucs'):
             words = line.split()
             starting_strucs.append(words[2])
-            continue
-        if line.startswith('velocity_method'):
-            words = line.split()
-            velocity_method = [int(words[-1])]
-            continue
-        if line.startswith('bKET'):
-            bKET = True
             continue
 finally:
      file_object.close()
@@ -476,6 +437,8 @@ cor_list = []
 exch_map = []
 window_track = []
 nexch = []
+cor = []
+vel = []
 #energy_file_object = []
 for i in range(nwin):
     temps[i] = temps[i]*kelvin
@@ -484,6 +447,11 @@ for i in range(nwin):
     window_track.append(i)
     accp.append(0)
     nexch.append(0)
+    cor.append(CharmmCrdFile(cor_list[i]))
+    vel.append([])
+if restart == 1:
+    for i in range(nwin):
+        vel[i] = read_vel_rept(i,"velocity_holder.txt")
 psf_file = psf
 psf = CharmmPsfFile(psf)
 psf_pmd = pmd.charmm.psf.CharmmPsfFile(psf_file)
@@ -500,9 +468,6 @@ for chain in top.chains():
 properties = {'Threads': str(ppn)}
 
 ###### equil phase ######
-for i in range(nwin):
-    with open("aa%d/temperature_holder.txt" % (i+1),'wt') as fpo:
-        fpo.write("%g" % (temps[i].value_in_unit(kelvin)))
 exch_map = [i for i in range(nwin)]
 for i in range(nexch_equil):
     energy = []
@@ -517,20 +482,12 @@ for i in range(nexch_equil):
 #            log_file_object.write(str(window_track[window]+1)+'| ')
 #        else:
 #            log_file_object.write(str(window_track[window]+1)+'||| ')
-        # VEL
-        if velocity_method[0] == 0:
-            vel_met = [0]
-        else:
-            if i == 0:
-                vel_met = [-1,window,exch_map[window]]
-            else:
-                vel_met = [velocity_method[0],window,exch_map[window]]    
         strtemp = temps[exch_map[window]]
-        cor = CharmmCrdFile(cor_list[window])
+        #cor = CharmmCrdFile(cor_list[window])
         outname = 'aa'+str(window+1)+'/1_'+str(i+1)+'_equil.cor'
         rand = random.randint(10,1000000000)
-        p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor, temps[window], 
-            strtemp, outname, properties, nsteps_equil, '', rand, window, return_dict, vel_met))
+        p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor[window],vel[window], temps[window], 
+            strtemp, outname, properties, nsteps_equil, '', rand, window, return_dict))
         p.daemon = True
         process_pool.append(p)
     for window in range(nwin):
@@ -541,9 +498,23 @@ for i in range(nexch_equil):
         results = return_dict[window]
         energy.append(results[0])
         process_time.append(results[1])
+        cor[window] = results[2]
+        vel[window] = results[3]
     end_time = time.time()
     cost_time = end_time-start_time
     exch_map = Temperature_Swap(range(i%2, nwin), temps, energy)
+    # swap cor and vel
+    for j in range(nwin-1):
+        if exch_map[j] == j+1 and exch_map[j+1] == j:
+            cor[j], cor[j+1] = cor[j+1], cor[j]
+            ratu = (temps[j+1]/temps[j])**0.5
+            ratd = (temps[j]/temps[j+1])**0.5
+            for k in range(len(vel[j])):
+                vel[j][k] = Vec3(vel[j][k].x * ratu, vel[j][k].y * ratu, vel[j][k].z * ratu)
+                vel[j+1][k] = Vec3(vel[j+1][k].x * ratd, vel[j+1][k].y * ratd, vel[j+1][k].z * ratd)
+                #vel[j][k], vel[j+1][k] = vel[j+1][k], vel[j][k]
+            vel[j], vel[j+1] = vel[j+1], vel[j]
+
     log_file_object.write('%s %s %.2f %.2f %s\n'%(time.strftime('%H:%M:%S', time.localtime(start_time)), 
         time.strftime('%H:%M:%S', time.localtime(end_time)), min(process_time), max(process_time), 
         convert_time((nexch_equil-i-1)*cost_time)))
@@ -567,26 +538,18 @@ for i in range(nsteps_start-1, nexch_prod):
     return_dict = multiprocessing.Manager().dict()
     log_file_object = open(log_file,'a')
     log_file_object.write('PROD '+str(i+1)+': ')
-    print(exch_map)
+
     for window in range(nwin):
         if window == nwin-1:
             log_file_object.write(str(window_track[window]+1)+'| ')
         else:
             log_file_object.write(str(window_track[window]+1)+'||| ')
-        # VEL
-        if velocity_method[0] == 0:
-            vel_met = [0]
-        else:
-            if i == 0 and nexch_equil == 0:
-                vel_met = [-1,window,exch_map[window]]
-            else:
-                vel_met = [velocity_method[0],window,exch_map[window]]    
         strtemp = temps[exch_map[window]]
-        cor = CharmmCrdFile(cor_list[window])
+        #cor = CharmmCrdFile(cor_list[window])
         outname = 'aa'+str(window+1)+'/1_'+str(i+1)+'_prod.cor'
         rand = random.randint(10,1000000000)
-        p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor, temps[window], 
-            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict, vel_met, bKET))
+        p = multiprocessing.Process(target=run_REX_LD, args=(psf_file, psf, forcefield, templete_map, cor[window], vel[window], temps[window], 
+            strtemp, outname, properties, nsteps_prod, 'aa'+str(window+1)+'/mc1.dcd', rand, window, return_dict))
         p.daemon = True
         process_pool.append(p)
     for window in range(nwin):
@@ -600,9 +563,25 @@ for i in range(nsteps_start-1, nexch_prod):
         f.write('%.6f\n'%(results[0]))
         f.close()
         process_time.append(results[1])
+        cor[window] = results[2]
+        vel[window] = results[3]
     end_time = time.time()
     cost_time = end_time-start_time
     exch_map = Temperature_Swap(range(i%2, nwin), temps, energy)
+    # swap cor and vel
+    for j in range(nwin-1):
+        if exch_map[j] == j+1 and exch_map[j+1] == j:
+            cor[j], cor[j+1] = cor[j+1], cor[j]
+            ratu = (temps[j+1]/temps[j])**0.5
+            ratd = (temps[j]/temps[j+1])**0.5
+            for k in range(len(vel[j])):
+                #vel[j][k] = Vec3(vel[j][k].x * ratu, vel[j][k].y * ratu, vel[j][k].z * ratu)
+                #vel[j+1][k] = Vec3(vel[j+1][k].x * ratd, vel[j+1][k].y * ratd, vel[j+1][k].z * ratd)
+                vel[j][k] = Vec3(vel[j][k][0] * ratu, vel[j][k][1] * ratu, vel[j][k][2] * ratu)
+                vel[j+1][k] = Vec3(vel[j+1][k][0] * ratd, vel[j+1][k][1] * ratd, vel[j+1][k][2] * ratd)
+                #vel[j][k], vel[j+1][k] = vel[j+1][k], vel[j][k]
+            vel[j], vel[j+1] = vel[j+1], vel[j]
+
     log_file_object.write('%s %s %.2f %.2f %s\n'%(time.strftime('%H:%M:%S', time.localtime(start_time)), 
         time.strftime('%H:%M:%S', time.localtime(end_time)), min(process_time), max(process_time), 
         convert_time((nexch_prod-i-1)*cost_time)))
